@@ -14,25 +14,15 @@ use crate::{
     cursor::CursorSpecification,
     error::{BulkWriteError, Error, ErrorKind, Result},
     operation::{
-        run_command::RunCommand,
-        GetMore,
-        OperationWithDefaults,
-        MAX_ENCRYPTED_WRITE_SIZE,
+        run_command::RunCommand, GetMore, OperationWithDefaults, MAX_ENCRYPTED_WRITE_SIZE,
     },
     options::{BulkWriteOptions, OperationType, WriteModel},
     results::{BulkWriteResult, DeleteResult, InsertOneResult, UpdateResult},
-    BoxFuture,
-    Client,
-    Cursor,
-    Namespace,
-    SessionCursor,
+    BoxFuture, Client, Cursor, Namespace, SessionCursor,
 };
 
 use super::{
-    ExecutionContext,
-    Retryability,
-    WriteResponseBody,
-    OP_MSG_OVERHEAD_BYTES,
+    ExecutionContext, Retryability, WriteResponseBody, OP_MSG_OVERHEAD_BYTES,
     SERVER_8_0_0_WIRE_VERSION,
 };
 
@@ -441,7 +431,8 @@ where
                         .await
                     }
                     None => {
-                        let cursor = Cursor::new(self.client.clone(), specification, None, None);
+                        let cursor: Cursor<server_responses::SingleOperationResponse> =
+                            Cursor::new(self.client.clone(), specification, None, None);
                         self.iterate_results_cursor(cursor, &mut result, &mut error)
                             .await
                     }

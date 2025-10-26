@@ -1,6 +1,7 @@
 #[cfg(feature = "in-use-encryption")]
 use crate::bson::RawDocumentBuf;
 use crate::bson::{doc, RawBsonRef, RawDocument, Timestamp};
+use crate::cursor::RawCursor;
 #[cfg(feature = "in-use-encryption")]
 use futures_core::future::BoxFuture;
 #[cfg(feature = "opentelemetry")]
@@ -21,10 +22,7 @@ use crate::otel::OtelFutureStub as _;
 use crate::{
     bson::Document,
     change_stream::{
-        event::ChangeStreamEvent,
-        session::SessionChangeStream,
-        ChangeStream,
-        ChangeStreamData,
+        event::ChangeStreamEvent, session::SessionChangeStream, ChangeStream, ChangeStreamData,
         WatchArgs,
     },
     cmap::{
@@ -33,33 +31,20 @@ use crate::{
             wire::{next_request_id, Message},
             PinnedConnectionHandle,
         },
-        ConnectionPool,
-        RawCommandResponse,
-        StreamDescription,
+        ConnectionPool, RawCommandResponse, StreamDescription,
     },
     cursor::{session::SessionCursor, Cursor, CursorSpecification},
     error::{
-        Error,
-        ErrorKind,
-        Result,
-        RETRYABLE_WRITE_ERROR,
-        TRANSIENT_TRANSACTION_ERROR,
+        Error, ErrorKind, Result, RETRYABLE_WRITE_ERROR, TRANSIENT_TRANSACTION_ERROR,
         UNKNOWN_TRANSACTION_COMMIT_RESULT,
     },
     event::command::{
-        CommandEvent,
-        CommandFailedEvent,
-        CommandStartedEvent,
-        CommandSucceededEvent,
+        CommandEvent, CommandFailedEvent, CommandStartedEvent, CommandSucceededEvent,
     },
     hello::LEGACY_HELLO_COMMAND_NAME_LOWERCASE,
     operation::{
         aggregate::{change_stream::ChangeStreamAggregate, AggregateTarget},
-        AbortTransaction,
-        CommandErrorBody,
-        CommitTransaction,
-        ExecutionContext,
-        Operation,
+        AbortTransaction, CommandErrorBody, CommitTransaction, ExecutionContext, Operation,
         Retryability,
     },
     options::{ChangeStreamOptions, SelectionCriteria},
@@ -192,6 +177,29 @@ impl Client {
         &self,
         mut op: impl BorrowMut<Op>,
     ) -> Result<Cursor<T>>
+    where
+        Op: Operation<O = CursorSpecification>,
+    {
+        Box::pin(async {
+            let mut details = self
+                .execute_operation_with_details(op.borrow_mut(), None)
+                .await?;
+            let pinned =
+                self.pin_connection_for_cursor(&details.output, &mut details.connection, None)?;
+            Ok(Cursor::new(
+                self.clone(),
+                details.output,
+                details.implicit_session,
+                pinned,
+            ))
+        })
+        .await
+    }
+
+    pub(crate) async fn execute_cursor_operation_raw<Op>(
+        &self,
+        mut op: impl BorrowMut<Op>,
+    ) -> Result<RawCursor>
     where
         Op: Operation<O = CursorSpecification>,
     {

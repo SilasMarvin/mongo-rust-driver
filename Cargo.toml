@@ -28,6 +28,8 @@ exclude = [
     "tests/**",
 ]
 
+[workspace]
+
 [features]
 default = ["compat-3-0-0", "rustls-tls", "dns-resolver"]
 compat-3-0-0 = ["compat-3-3-0", "bson-2"]
@@ -217,6 +219,8 @@ features = ["v4"]
 anyhow = { version = "1.0", features = ["backtrace"] }
 approx = "0.5.1"
 backtrace = { version = "0.3.68" }
+criterion = { version = "0.5", features = ["async_tokio"] }
+dotenv = "0.15"
 function_name = "0.2.1"
 futures = "0.3"
 hex = "0.4"
@@ -255,6 +259,14 @@ cross-krb5 = { version = "0.4.2", optional = true, default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.60", optional = true, features = ["Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Foundation", "Win32_System", "Win32_System_Rpc"] }
+
+[[bench]]
+name = "find"
+harness = false
+
+[[bench]]
+name = "profile_find_raw"
+harness = false
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

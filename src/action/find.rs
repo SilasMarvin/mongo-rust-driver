@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use crate::bson::{Bson, Document};
+use crate::{
+    bson::{Bson, Document, RawDocumentBuf},
+    cursor::RawCursor,
+};
 use serde::de::DeserializeOwned;
 
 use crate::{
@@ -10,19 +13,11 @@ use crate::{
     operation::Find as Op,
     options::ReadConcern,
     selection_criteria::SelectionCriteria,
-    ClientSession,
-    Collection,
-    Cursor,
-    SessionCursor,
+    ClientSession, Collection, Cursor, SessionCursor,
 };
 
 use super::{
-    action_impl,
-    deeplink,
-    export_doc,
-    option_setters,
-    options_doc,
-    ExplicitSession,
+    action_impl, deeplink, export_doc, option_setters, options_doc, ExplicitSession,
     ImplicitSession,
 };
 
@@ -178,6 +173,60 @@ impl<'a, T: DeserializeOwned + Send + Sync> Action for FindOne<'a, T> {
         } else {
             let mut cursor = find.await?;
             cursor.next().await.transpose()
+        }
+    }
+}
+
+/// Finds the documents in a collection matching a filter.  Construct with [`Collection::find`].
+#[must_use]
+pub struct FindRaw<'a, Session = ImplicitSession> {
+    coll: &'a Collection<RawDocumentBuf>,
+    filter: Document,
+    options: Option<FindOptions>,
+    session: Session,
+}
+
+#[option_setters(crate::coll::options::FindOptions)]
+impl<'a, Session> FindRaw<'a, Session> {
+    /// Use the provided session when running the operation.
+    pub fn session<'s>(
+        self,
+        value: impl Into<&'s mut ClientSession>,
+    ) -> FindRaw<'a, ExplicitSession<'s>> {
+        FindRaw {
+            coll: self.coll,
+            filter: self.filter,
+            options: self.options,
+            session: ExplicitSession(value.into()),
+        }
+    }
+}
+
+#[action_impl(sync = crate::sync::Cursor<RawDocumentBuf>)]
+impl<'a> Action for FindRaw<'a, ImplicitSession> {
+    type Future = FindRawFuture;
+
+    async fn execute(mut self) -> Result<RawCursor> {
+        resolve_options!(self.coll, self.options, [read_concern, selection_criteria]);
+
+        let find = Op::new(self.coll.namespace(), self.filter, self.options);
+        self.coll.client().execute_cursor_operation_raw(find).await
+    }
+}
+
+impl Collection<RawDocumentBuf> {
+    /// Finds the documents in the collection matching `filter`.
+    ///
+    /// `await` will return d[`Result<Cursor<T>>`] (or d[`Result<SessionCursor<T>>`] if a session is
+    /// provided).
+    #[deeplink]
+    #[options_doc(find)]
+    pub fn find_raw(&self, filter: Document) -> FindRaw<'_> {
+        FindRaw {
+            coll: self,
+            filter,
+            options: None,
+            session: ImplicitSession,
         }
     }
 }

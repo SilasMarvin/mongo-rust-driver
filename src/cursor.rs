@@ -8,9 +8,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::bson::RawDocument;
+use crate::{bson::RawDocument, cursor::common::stream_poll_next_raw};
 
-#[cfg(test)]
 use crate::bson::RawDocumentBuf;
 use derive_where::derive_where;
 use futures_core::Stream;
@@ -24,18 +23,12 @@ use crate::{
     cmap::conn::PinnedConnectionHandle,
     cursor::common::ImplicitClientSessionHandle,
     error::{Error, Result},
-    Client,
-    ClientSession,
+    Client, ClientSession,
 };
 use common::{kill_cursor, GenericCursor};
 pub(crate) use common::{
-    stream_poll_next,
-    BatchValue,
-    CursorInformation,
-    CursorSpecification,
-    CursorStream,
-    NextInBatchFuture,
-    PinnedConnection,
+    stream_poll_next, BatchValue, CursorInformation, CursorSpecification, CursorStream,
+    NextInBatchFuture, PinnedConnection,
 };
 
 /// A [`Cursor`] streams the result of a query. When a query is made, the returned [`Cursor`] will
@@ -328,6 +321,19 @@ where
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // This `unwrap` is safe because `wrapped_cursor` is always `Some` outside of `drop`.
         stream_poll_next(self.wrapped_cursor.as_mut().unwrap(), cx)
+    }
+}
+
+// TODO: Implement Stream for Cursor for some custom type T
+
+pub struct RawCursorMarker;
+pub type RawCursor = Cursor<RawCursorMarker>;
+
+impl Stream for RawCursor {
+    type Item = Result<RawDocumentBuf>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        stream_poll_next_raw(self.wrapped_cursor.as_mut().unwrap(), cx)
     }
 }
 

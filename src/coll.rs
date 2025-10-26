@@ -13,8 +13,7 @@ use crate::{
     concern::{ReadConcern, WriteConcern},
     error::{Error, Result},
     selection_criteria::SelectionCriteria,
-    Client,
-    Database,
+    Client, Database,
 };
 
 /// `Collection` is the client-side abstraction of a MongoDB Collection. It can be used to

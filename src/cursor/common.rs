@@ -20,8 +20,7 @@ use crate::{
     operation::{self, GetMore},
     options::ServerAddress,
     results::GetMoreResult,
-    Client,
-    Namespace,
+    Client, Namespace,
 };
 
 /// The result of one attempt to advance a cursor.
@@ -281,6 +280,27 @@ where
                         doc.as_bytes(),
                     )?)))
                 }
+                BatchValue::Empty => continue,
+                BatchValue::Exhausted => return Poll::Ready(None),
+            },
+        }
+    }
+}
+
+// To avoid a private trait (`CursorStream`) in a public interface (`impl Stream`), this is provided
+// as a free function rather than a blanket impl.
+pub(crate) fn stream_poll_next_raw<S>(
+    this: &mut S,
+    cx: &mut Context<'_>,
+) -> Poll<Option<Result<RawDocumentBuf>>>
+where
+    S: CursorStream,
+{
+    loop {
+        match this.poll_next_in_batch(cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(bv) => match bv? {
+                BatchValue::Some { doc, .. } => return Poll::Ready(Some(Ok(doc))),
                 BatchValue::Empty => continue,
                 BatchValue::Exhausted => return Poll::Ready(None),
             },
