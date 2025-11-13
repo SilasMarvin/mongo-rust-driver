@@ -13,7 +13,9 @@ pub(crate) mod drop_database;
 mod drop_indexes;
 mod find;
 pub(crate) mod find_and_modify;
+pub(crate) mod find_raw;
 mod get_more;
+pub(crate) mod get_more_raw;
 mod insert;
 pub(crate) mod list_collections;
 pub(crate) mod list_databases;
@@ -38,25 +40,15 @@ use crate::{
     client::{ClusterTime, HELLO_COMMAND_NAMES, REDACTED_COMMANDS},
     cmap::{
         conn::{pooled::PooledConnection, PinnedConnectionHandle},
-        Command,
-        RawCommandResponse,
-        StreamDescription,
+        Command, RawCommandResponse, StreamDescription,
     },
     error::{
-        CommandError,
-        Error,
-        ErrorKind,
-        IndexedWriteError,
-        InsertManyError,
-        Result,
-        WriteConcernError,
-        WriteFailure,
+        CommandError, Error, ErrorKind, IndexedWriteError, InsertManyError, Result,
+        WriteConcernError, WriteFailure,
     },
     options::{ClientOptions, WriteConcern},
     selection_criteria::SelectionCriteria,
-    BoxFuture,
-    ClientSession,
-    Namespace,
+    BoxFuture, ClientSession, Namespace,
 };
 
 pub(crate) use abort_transaction::AbortTransaction;
@@ -142,6 +134,27 @@ pub(crate) trait Operation {
         response: &'a RawCommandResponse,
         context: ExecutionContext<'a>,
     ) -> BoxFuture<'a, Result<Self::O>>;
+
+    /// Whether this operation prefers to take ownership of the server response body for
+    /// zero-copy handling.
+    ///
+    /// Operations that parse raw batches (e.g. raw find/getMore) should return `true` and implement
+    /// [`handle_response_owned`] to avoid cloning the server reply bytes.
+    fn wants_owned_response(&self) -> bool {
+        false
+    }
+
+    /// Interprets the server response taking ownership of the body to enable zero-copy handling.
+    ///
+    /// Default behavior delegates to the borrowed [`handle_response`]; operations that return
+    /// `true` from [`wants_owned_response`] should override this to consume the response.
+    fn handle_response_owned<'a>(
+        &'a self,
+        _response: RawCommandResponse,
+        _context: ExecutionContext<'a>,
+    ) -> BoxFuture<'a, Result<Self::O>> {
+        unimplemented!()
+    }
 
     /// Interpret an error encountered while sending the built command to the server, potentially
     /// recovering.
@@ -230,6 +243,36 @@ pub(crate) trait OperationWithDefaults: Send + Sync {
         async move { self.handle_response(response, context) }.boxed()
     }
 
+    /// Whether this operation prefers to take ownership of the server response body for
+    /// zero-copy handling.
+    ///
+    /// Override to `true` for operations that can consume the response without cloning it.
+    fn wants_owned_response(&self) -> bool {
+        false
+    }
+
+    /// Interprets the server response taking ownership of the body to enable zero-copy handling.
+    ///
+    /// Default implementation defers to the borrowed handler; override for true zero-copy handling.
+    fn handle_response_owned<'a>(
+        &'a self,
+        response: RawCommandResponse,
+        context: ExecutionContext<'a>,
+    ) -> Result<Self::O> {
+        // By default, delegate to borrowed path by re-borrowing.
+        // Note: default impls that want zero-copy should override this.
+        self.handle_response(&response, context)
+    }
+
+    /// Async wrapper for owned-response handling.
+    fn handle_response_owned_async<'a>(
+        &'a self,
+        response: RawCommandResponse,
+        context: ExecutionContext<'a>,
+    ) -> BoxFuture<'a, Result<Self::O>> {
+        async move { self.handle_response_owned(response, context) }.boxed()
+    }
+
     /// Interpret an error encountered while sending the built command to the server, potentially
     /// recovering.
     fn handle_error(&self, error: Error) -> Result<Self::O> {
@@ -308,6 +351,16 @@ where
         context: ExecutionContext<'a>,
     ) -> BoxFuture<'a, Result<Self::O>> {
         self.handle_response_async(response, context)
+    }
+    fn wants_owned_response(&self) -> bool {
+        self.wants_owned_response()
+    }
+    fn handle_response_owned<'a>(
+        &'a self,
+        response: RawCommandResponse,
+        context: ExecutionContext<'a>,
+    ) -> BoxFuture<'a, Result<Self::O>> {
+        self.handle_response_owned_async(response, context)
     }
     fn handle_error(&self, error: Error) -> Result<Self::O> {
         self.handle_error(error)

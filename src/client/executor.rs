@@ -21,10 +21,7 @@ use crate::otel::OtelFutureStub as _;
 use crate::{
     bson::Document,
     change_stream::{
-        event::ChangeStreamEvent,
-        session::SessionChangeStream,
-        ChangeStream,
-        ChangeStreamData,
+        event::ChangeStreamEvent, session::SessionChangeStream, ChangeStream, ChangeStreamData,
         WatchArgs,
     },
     cmap::{
@@ -33,33 +30,20 @@ use crate::{
             wire::{next_request_id, Message},
             PinnedConnectionHandle,
         },
-        ConnectionPool,
-        RawCommandResponse,
-        StreamDescription,
+        ConnectionPool, RawCommandResponse, StreamDescription,
     },
     cursor::{session::SessionCursor, Cursor, CursorSpecification},
     error::{
-        Error,
-        ErrorKind,
-        Result,
-        RETRYABLE_WRITE_ERROR,
-        TRANSIENT_TRANSACTION_ERROR,
+        Error, ErrorKind, Result, RETRYABLE_WRITE_ERROR, TRANSIENT_TRANSACTION_ERROR,
         UNKNOWN_TRANSACTION_COMMIT_RESULT,
     },
     event::command::{
-        CommandEvent,
-        CommandFailedEvent,
-        CommandStartedEvent,
-        CommandSucceededEvent,
+        CommandEvent, CommandFailedEvent, CommandStartedEvent, CommandSucceededEvent,
     },
     hello::LEGACY_HELLO_COMMAND_NAME_LOWERCASE,
     operation::{
         aggregate::{change_stream::ChangeStreamAggregate, AggregateTarget},
-        AbortTransaction,
-        CommandErrorBody,
-        CommitTransaction,
-        ExecutionContext,
-        Operation,
+        AbortTransaction, CommandErrorBody, CommitTransaction, ExecutionContext, Operation,
         Retryability,
     },
     options::{ChangeStreamOptions, SelectionCriteria},
@@ -209,6 +193,61 @@ impl Client {
             ))
         })
         .await
+    }
+
+    pub(crate) async fn execute_raw_batch_cursor_operation<Op>(
+        &self,
+        mut op: impl BorrowMut<Op>,
+    ) -> Result<crate::cursor::raw_batch::RawBatchCursor>
+    where
+        Op: Operation<O = crate::cursor::raw_batch::RawBatchCursorSpecification>,
+    {
+        Box::pin(async {
+            let mut details = self
+                .execute_operation_with_details(op.borrow_mut(), None)
+                .await?;
+            // Mirror pinning logic without a CursorSpecification.
+            let pinned = if self.is_load_balanced() && details.output.info.id != 0 {
+                Some(details.connection.pin()?)
+            } else {
+                None
+            };
+            Ok(crate::cursor::raw_batch::RawBatchCursor::new(
+                self.clone(),
+                details.output,
+                details.implicit_session,
+                pinned,
+            ))
+        })
+        .await
+    }
+
+    pub(crate) async fn execute_session_raw_batch_cursor_operation<Op>(
+        &self,
+        mut op: impl BorrowMut<Op>,
+        session: &mut ClientSession,
+    ) -> Result<crate::cursor::raw_batch::SessionRawBatchCursor>
+    where
+        Op: Operation<O = crate::cursor::raw_batch::RawBatchCursorSpecification>,
+    {
+        let mut details = self
+            .execute_operation_with_details(op.borrow_mut(), &mut *session)
+            .await?;
+
+        // Prefer the transaction's pinned connection if present; otherwise mirror load-balanced
+        // pinning.
+        let pinned = if let Some(handle) = session.transaction.pinned_connection() {
+            Some(handle.replicate())
+        } else if self.is_load_balanced() && details.output.info.id != 0 {
+            Some(details.connection.pin()?)
+        } else {
+            None
+        };
+        Ok(crate::cursor::raw_batch::SessionRawBatchCursor::new(
+            self.clone(),
+            details.output,
+            pinned,
+        ))
     }
 
     pub(crate) async fn execute_session_cursor_operation<Op, T>(
@@ -657,15 +696,30 @@ impl Client {
                         effective_criteria: effective_criteria.clone(),
                     };
 
-                    match op.handle_response(&response, context).await {
-                        Ok(response) => Ok(response),
-                        Err(mut err) => {
-                            err.add_labels_and_update_pin(
-                                Some(connection.stream_description()?),
-                                session,
-                                Some(retryability),
-                            );
-                            Err(err.with_server_response(&response))
+                    if op.wants_owned_response() {
+                        match op.handle_response_owned(response, context).await {
+                            Ok(output) => Ok(output),
+                            Err(mut err) => {
+                                err.add_labels_and_update_pin(
+                                    Some(connection.stream_description()?),
+                                    session,
+                                    Some(retryability),
+                                );
+                                // Cannot attach server response; it was moved.
+                                Err(err)
+                            }
+                        }
+                    } else {
+                        match op.handle_response(&response, context).await {
+                            Ok(output) => Ok(output),
+                            Err(mut err) => {
+                                err.add_labels_and_update_pin(
+                                    Some(connection.stream_description()?),
+                                    session,
+                                    Some(retryability),
+                                );
+                                Err(err.with_server_response(&response))
+                            }
                         }
                     }
                 }

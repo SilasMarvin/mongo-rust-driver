@@ -142,6 +142,35 @@ impl<'a, T: Send + Sync> Action for Find<'a, T, ExplicitSession<'a>> {
     }
 }
 
+/// Finds documents in a collection and returns raw server batches. Construct with
+/// [`Database::find_raw_batches`](crate::Database::find_raw_batches).
+#[must_use]
+pub struct FindRawBatches<'a, Session = ImplicitSession> {
+    pub(crate) db: &'a crate::Database,
+    pub(crate) collection: String,
+    pub(crate) filter: Document,
+    pub(crate) options: Option<FindOptions>,
+    pub(crate) session: Session,
+}
+
+#[option_setters(crate::coll::options::FindOptions)]
+#[export_doc(find_raw_batches)]
+impl<'a, Session> FindRawBatches<'a, Session> {
+    /// Use the provided session when running the operation.
+    pub fn session<'s>(
+        self,
+        value: impl Into<&'s mut ClientSession>,
+    ) -> FindRawBatches<'a, ExplicitSession<'s>> {
+        FindRawBatches {
+            db: self.db,
+            collection: self.collection,
+            filter: self.filter,
+            options: self.options,
+            session: ExplicitSession(value.into()),
+        }
+    }
+}
+
 /// Finds a single document in a collection matching a filter.  Construct with
 /// [`Collection::find_one`].
 #[must_use]
